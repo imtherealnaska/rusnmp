@@ -1,0 +1,7 @@
+Level 1: SNMP Message (SEQUENCE) (The whole packet)
+
+Level 2: PDU (SEQUENCE) (e.g., GetResponse)
+
+Level 3: VarBindList (SEQUENCE OF) <-- This is parse_varbind_list
+
+Level 4: VarBind (SEQUENCE) <-- This is the inner-most SEQUENCE
