@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 pub mod decoder;
+pub mod encoder;
 
 pub type BerResult<T> = Result<T, BerError>;
 

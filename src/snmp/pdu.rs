@@ -1,4 +1,5 @@
 use crate::ber::decoder::{decode_unsigned_integer, decode_unsigned_integer64};
+use crate::ber::encoder;
 use crate::ber::{Asn1Tag, BerError, parse_ber_object};
 use crate::ber::{BerObject, BerResult, decode_oid, decoder::decode_integer};
 
@@ -6,6 +7,15 @@ use crate::ber::{BerObject, BerResult, decode_oid, decoder::decode_integer};
 pub struct VarBind {
     pub oid: Vec<u32>,
     pub value: ObjectSyntax,
+}
+
+impl VarBind {
+    pub fn write_to_buf(&self, buf: &mut Vec<u8>) {
+        encoder::encode_sequence_with(buf, |content_buf| {
+            encoder::encode_oid(content_buf, &self.oid);
+            self.value.write_to_buf(content_buf);
+        });
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +70,22 @@ impl ObjectSyntax {
                 Ok(ObjectSyntax::Counter64(val))
             }
             _ => Err(BerError::UnsupportedType(obj.tag as u8)),
+        }
+    }
+
+    // for encoder
+    pub fn write_to_buf(&self, buf: &mut Vec<u8>) {
+        match self {
+            ObjectSyntax::Integer(val) => encoder::encode_integer(buf, *val),
+            ObjectSyntax::OctetString(val) => encoder::encode_octet_string(buf, val),
+            ObjectSyntax::Null => encoder::encode_null(buf),
+            ObjectSyntax::ObjectIdentifier(val) => encoder::encode_oid(buf, val),
+            ObjectSyntax::IpAddress(val) => encoder::encode_ip_address(buf, val),
+            ObjectSyntax::Counter32(val) => encoder::encode_counter32(buf, *val),
+            ObjectSyntax::Gauge32(val) => encoder::encode_gauge32(buf, *val),
+            ObjectSyntax::TimeTicks(val) => encoder::encode_timeticks(buf, *val),
+            ObjectSyntax::Opaque(val) => encoder::encode_opaque(buf, val),
+            ObjectSyntax::Counter64(val) => encoder::encode_counter64(buf, *val),
         }
     }
 }
@@ -152,6 +178,21 @@ pub struct Pdu {
     pub error_status: ErrorStatus,
     pub error_index: i32,
     pub varbinds: Vec<VarBind>,
+}
+
+impl Pdu {
+    pub fn write_to_buf(&self, buf: &mut Vec<u8>) {
+        encoder::encode_container_with(buf, self.tag, |content_buf| {
+            encoder::encode_integer(content_buf, self.request_id);
+            encoder::encode_integer(content_buf, self.error_status as i32);
+            encoder::encode_integer(content_buf, self.error_index);
+            encoder::encode_sequence_with(content_buf, |varbind_list_buf| {
+                for varbind in &self.varbinds {
+                    varbind.write_to_buf(varbind_list_buf);
+                }
+            });
+        });
+    }
 }
 
 pub fn parse_pdu(obj: BerObject) -> BerResult<Pdu> {

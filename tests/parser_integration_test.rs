@@ -1,7 +1,10 @@
 use rusnmp::ber::Asn1Tag;
 use rusnmp::snmp::message::parse_message;
+use rusnmp::snmp::message::SnmpMessage;
 use rusnmp::snmp::pdu::ErrorStatus;
 use rusnmp::snmp::pdu::ObjectSyntax;
+use rusnmp::snmp::pdu::Pdu;
+use rusnmp::snmp::pdu::VarBind;
 
 const RAW_PACKET: &[u8] = &[
     0x30, 0x29, 0x02, 0x01, 0x01, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0xa0, 0x1c, 0x02,
@@ -100,4 +103,45 @@ fn test_parse_real_snmpd_response() {
     println!("Community: {}", String::from_utf8_lossy(&msg.community));
     println!("PDU type: {:?}", msg.pdu.tag);
     println!("VarBinds: {}", msg.pdu.varbinds.len());
+}
+
+
+// to bytes 
+
+#[test]
+fn test_encode_v2c_get_request() {
+
+let message = SnmpMessage {
+        version: 1,
+        community: b"public".to_vec(),
+        pdu: Pdu {
+            tag: Asn1Tag::GetRequest,
+            request_id: 1,
+            error_status: ErrorStatus::NoError,
+            error_index: 0,
+            varbinds: vec![VarBind {
+                oid: vec![1, 3, 6, 1, 2, 1, 1, 1, 0],
+                value: ObjectSyntax::Null,
+            }],
+        },
+    };
+
+    // 2. Encode our struct to our new, *minimal* bytes
+    let encoded_bytes = message.to_bytes();
+
+    // 3. (Optional) Let's check our new minimal bytes against the diff.
+    //    Our encoded bytes are the "left" array from the panic.
+    let our_minimal_bytes = vec![
+        48, 38, 2, 1, 1, 4, 6, 112, 117, 98, 108, 105, 99, 160, 25, 2, 1, 1, 2, 1, 0, 2,
+        1, 0, 48, 14, 48, 12, 6, 8, 43, 6, 1, 2, 1, 1, 1, 0, 5, 0,
+    ];
+    assert_eq!(encoded_bytes, our_minimal_bytes);
+
+    // 4. THE REAL TEST: Parse our *own* encoded bytes back.
+    //    If this works, our parser and encoder are perfectly compatible.
+    let round_tripped_message = parse_message(&encoded_bytes).unwrap();
+
+    // 5. Assert that the struct we got back is *identical*
+    //    to the one we started with.
+    assert_eq!(message, round_tripped_message);
 }

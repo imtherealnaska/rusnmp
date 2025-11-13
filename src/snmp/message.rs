@@ -1,5 +1,5 @@
 use crate::{
-    ber::{Asn1Tag, BerError, BerResult, decoder::decode_integer, parse_ber_object},
+    ber::{Asn1Tag, BerError, BerResult, decoder::decode_integer, encoder, parse_ber_object},
     snmp::pdu::{Pdu, parse_pdu},
 };
 
@@ -63,4 +63,20 @@ pub fn parse_message(inpt: &[u8]) -> BerResult<SnmpMessage> {
         community,
         pdu,
     })
+}
+
+impl SnmpMessage {
+    pub fn write_to_buf(&self, buf: &mut Vec<u8>) {
+        encoder::encode_sequence_with(buf, |content_buf| {
+            encoder::encode_integer(content_buf, self.version);
+            encoder::encode_octet_string(content_buf, &self.community);
+            self.pdu.write_to_buf(content_buf);
+        });
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        self.write_to_buf(&mut buf);
+        buf
+    }
 }
