@@ -1,7 +1,7 @@
 use crate::ber::Asn1Tag;
 use crate::snmp::message::{SnmpMessage, parse_message};
 use crate::snmp::pdu::{ErrorStatus, ObjectSyntax, Pdu, VarBind};
-use anyhow::anyhow;
+use anyhow::{Ok, anyhow};
 
 use anyhow::Context;
 pub mod network;
@@ -16,6 +16,13 @@ fn parse_oid_string(oid_str: &str) -> Result<Vec<u32>> {
                 .with_context(|| format!("Invalid OID component: '{}'", s))
         })
         .collect::<Result<Vec<u32>, _>>()
+}
+
+fn is_in_subtree(root: &[u32], child: &[u32]) -> bool {
+    if child.len() < root.len() {
+        return false;
+    }
+    child.starts_with(root)
 }
 
 /// The main SNMP Manager struct.
@@ -77,5 +84,80 @@ impl Manager {
             .into_iter()
             .next()
             .ok_or_else(|| anyhow!("No VarBinds in response"))
+    }
+
+    pub async fn walk(
+        &self,
+        target: &str,
+        community: &str,
+        root_id_str: &str,
+    ) -> Result<Vec<VarBind>> {
+        let mut results = Vec::new();
+        let root_id = parse_oid_string(root_id_str)?;
+        let mut current_oid = root_id.clone();
+
+        loop {
+            let message = SnmpMessage {
+                version: 1,
+                community: community.as_bytes().to_vec(),
+                pdu: Pdu {
+                    tag: Asn1Tag::GetNextRequest,
+                    request_id: 1,
+                    error_status: ErrorStatus::NoError,
+                    error_index: 0,
+                    varbinds: vec![VarBind {
+                        oid: current_oid.clone(),
+                        value: ObjectSyntax::Null,
+                    }],
+                },
+            };
+
+            let packet_bytes = message.to_bytes();
+
+            let response_bytes = network::send_and_receive(target, &packet_bytes).await?;
+
+            let response_message = parse_message(&response_bytes)
+                .map_err(|e| anyhow!("Failed to parse response: {}", e))?;
+
+            // check for errors in the response
+            if response_message.pdu.error_status != ErrorStatus::NoError {
+                if response_message.pdu.error_status == ErrorStatus::NoSuchName {
+                    break;
+                }
+
+                return Err(anyhow!(
+                    "
+                SNMP Error: {:?} (Index : {}) ,
+                        ",
+                    response_message.pdu.error_status,
+                    response_message.pdu.error_index
+                ));
+            }
+
+            let response_varbind = response_message
+                .pdu
+                .varbinds
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("No Varbinds in getnext response"))?;
+
+            match response_varbind.value {
+                ObjectSyntax::NoSuchObject
+                | ObjectSyntax::NoSuchInstance
+                | ObjectSyntax::EndOfMib => {
+                    break;
+                }
+                _ => {}
+            }
+
+            if !is_in_subtree(&root_id, &response_varbind.oid) {
+                break;
+            }
+
+            current_oid = response_varbind.oid.clone();
+            results.push(response_varbind);
+        }
+        Ok(results)
+
     }
 }

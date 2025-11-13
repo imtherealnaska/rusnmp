@@ -1,16 +1,35 @@
 use anyhow::Result;
 use clap::Parser;
-use rusnmp::{manager::Manager, snmp::pdu::ObjectSyntax};
+use futures::future::join_all;
+use rusnmp::{
+    manager::Manager,
+    snmp::pdu::{ObjectSyntax, VarBind},
+};
 
 #[derive(Parser, Debug)]
-#[clap(version = "1.0")]
 struct Cli {
-    #[clap(required = true)]
-    target: String,
-    #[clap(required = true)]
-    community: String,
-    #[clap(required = true)]
-    oid: String,
+    #[clap(subcommand)]
+    command: Command,
+}
+
+#[derive(Parser, Debug)]
+enum Command {
+    Get {
+        #[clap(short, long, required = true)]
+        targets: Vec<String>,
+        #[clap(short, long, required = true)]
+        community: String,
+        #[clap(short, long, required = true)]
+        oid: String,
+    },
+    Walk {
+        #[clap(short, long, required = true)]
+        targets: Vec<String>,
+        #[clap(short, long, required = true)]
+        community: String,
+        #[clap(short, long, required = true)]
+        oid: String,
+    },
 }
 
 #[tokio::main]
@@ -18,47 +37,79 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let manager = Manager::new();
 
-    println!(
-        "Sending GetRequest to {} with community '{}' for OID {}...",
-        cli.target, cli.community, cli.oid
-    );
+    match cli.command {
+        Command::Get {
+            targets,
+            community,
+            oid,
+        } => {
+            println!("Starting GET for {} targets", targets.len());
 
-    let varbind = manager.get(&cli.target, &cli.community, &cli.oid).await?;
+            let futures = targets.iter().map(|target| {
+                println!("---spawining task for {}", target);
+                manager.get(target, &community, &oid)
+            });
 
-    println!("\n--- Success! ---");
-    println!(
-        "OID: {}",
-        varbind
-            .oid
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(".")
-    );
+            let results = join_all(futures).await;
 
-    match varbind.value {
-        ObjectSyntax::OctetString(val) => {
-            println!("Value: {}", String::from_utf8_lossy(&val));
+            for (target, result) in targets.iter().zip(results) {
+                println!("\n--- Result for {} ---", target);
+                match result {
+                    Ok(varbind) => print_varbind(&varbind),
+                    Err(e) => println!("Error: {}", e),
+                }
+            }
         }
-        ObjectSyntax::Integer(val) => {
-            println!("Value: {}", val);
-        }
-        ObjectSyntax::Counter32(val) => {
-            println!("Value: {}", val);
-        }
-        ObjectSyntax::Gauge32(val) => {
-            println!("Value: {}", val);
-        }
-        ObjectSyntax::TimeTicks(val) => {
-            println!("Value: {}", val);
-        }
-        ObjectSyntax::Counter64(val) => {
-            println!("Value: {}", val);
-        }
-        other => {
-            println!("Value: {:?}", other);
+        Command::Walk {
+            targets,
+            community,
+            oid,
+        } => {
+            let futures = targets.iter().map(|target| {
+                println!("- Spawning task for {}", target);
+                manager.walk(target, &community, &oid)
+            });
+
+            // Run all tasks concurrently
+            let results = join_all(futures).await;
+
+            // Loop through the results and print them
+            for (target, result) in targets.iter().zip(results) {
+                println!("\n--- Result for {} ---", target);
+                match result {
+                    Ok(varbinds) => {
+                        println!("Success! (Found {} results)", varbinds.len());
+                        for varbind in varbinds {
+                            print_varbind(&varbind);
+                        }
+                    }
+                    Err(e) => println!("Error: {}", e),
+                }
+            }
         }
     }
-
     Ok(())
+}
+
+fn print_varbind(varbind: &VarBind) {
+    let oid_str = varbind
+        .oid
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(".");
+
+    print!("OID: {} | Value: ", oid_str);
+
+    match &varbind.value {
+        ObjectSyntax::OctetString(val) => {
+            println!("{}", String::from_utf8_lossy(val));
+        }
+        ObjectSyntax::Integer(val) => println!("{}", val),
+        ObjectSyntax::Counter32(val) => println!("{}", val),
+        ObjectSyntax::Gauge32(val) => println!("{}", val),
+        ObjectSyntax::TimeTicks(val) => println!("{}", val),
+        ObjectSyntax::Counter64(val) => println!("{}", val),
+        other => println!("{:?}", other),
+    }
 }

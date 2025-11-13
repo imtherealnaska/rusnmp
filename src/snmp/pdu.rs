@@ -30,6 +30,10 @@ pub enum ObjectSyntax {
     TimeTicks(u32),
     Opaque(Vec<u8>),
     Counter64(u64),
+
+    NoSuchObject,
+    NoSuchInstance,
+    EndOfMib,
 }
 
 impl ObjectSyntax {
@@ -69,6 +73,9 @@ impl ObjectSyntax {
                 let val = decode_unsigned_integer64(obj.value)?;
                 Ok(ObjectSyntax::Counter64(val))
             }
+            Asn1Tag::NoSuchObject => Ok(ObjectSyntax::NoSuchObject),
+            Asn1Tag::NoSuchInstance => Ok(ObjectSyntax::NoSuchInstance),
+            Asn1Tag::EndOfMib => Ok(ObjectSyntax::EndOfMib),
             _ => Err(BerError::UnsupportedType(obj.tag as u8)),
         }
     }
@@ -86,6 +93,18 @@ impl ObjectSyntax {
             ObjectSyntax::TimeTicks(val) => encoder::encode_timeticks(buf, *val),
             ObjectSyntax::Opaque(val) => encoder::encode_opaque(buf, val),
             ObjectSyntax::Counter64(val) => encoder::encode_counter64(buf, *val),
+            ObjectSyntax::NoSuchObject => {
+                buf.push(Asn1Tag::NoSuchObject as u8);
+                buf.push(0x00);
+            }
+            ObjectSyntax::NoSuchInstance => {
+                buf.push(Asn1Tag::NoSuchInstance as u8);
+                buf.push(0x00);
+            }
+            ObjectSyntax::EndOfMib => {
+                buf.push(Asn1Tag::EndOfMib as u8);
+                buf.push(0x00);
+            }
         }
     }
 }

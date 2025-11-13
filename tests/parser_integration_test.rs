@@ -1,6 +1,6 @@
 use rusnmp::ber::Asn1Tag;
-use rusnmp::snmp::message::parse_message;
 use rusnmp::snmp::message::SnmpMessage;
+use rusnmp::snmp::message::parse_message;
 use rusnmp::snmp::pdu::ErrorStatus;
 use rusnmp::snmp::pdu::ObjectSyntax;
 use rusnmp::snmp::pdu::Pdu;
@@ -105,13 +105,11 @@ fn test_parse_real_snmpd_response() {
     println!("VarBinds: {}", msg.pdu.varbinds.len());
 }
 
-
-// to bytes 
+// to bytes
 
 #[test]
 fn test_encode_v2c_get_request() {
-
-let message = SnmpMessage {
+    let message = SnmpMessage {
         version: 1,
         community: b"public".to_vec(),
         pdu: Pdu {
@@ -132,8 +130,8 @@ let message = SnmpMessage {
     // 3. (Optional) Let's check our new minimal bytes against the diff.
     //    Our encoded bytes are the "left" array from the panic.
     let our_minimal_bytes = vec![
-        48, 38, 2, 1, 1, 4, 6, 112, 117, 98, 108, 105, 99, 160, 25, 2, 1, 1, 2, 1, 0, 2,
-        1, 0, 48, 14, 48, 12, 6, 8, 43, 6, 1, 2, 1, 1, 1, 0, 5, 0,
+        48, 38, 2, 1, 1, 4, 6, 112, 117, 98, 108, 105, 99, 160, 25, 2, 1, 1, 2, 1, 0, 2, 1, 0, 48,
+        14, 48, 12, 6, 8, 43, 6, 1, 2, 1, 1, 1, 0, 5, 0,
     ];
     assert_eq!(encoded_bytes, our_minimal_bytes);
 

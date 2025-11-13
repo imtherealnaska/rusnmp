@@ -84,6 +84,11 @@ pub enum Asn1Tag {
     GetBulkRequest = 0xA5, // [CONTEXT 5]
     InformRequest = 0xA6,  // [CONTEXT 6]
     SnmpV2Trap = 0xA7,     // [CONTEXT 7]
+
+    // exception types
+    NoSuchObject = 0x80,
+    NoSuchInstance = 0x81,
+    EndOfMib = 0x82,
 }
 
 impl Asn1Tag {
@@ -131,6 +136,9 @@ impl Asn1Tag {
             0xA5 => Ok(Asn1Tag::GetBulkRequest),
             0xA6 => Ok(Asn1Tag::InformRequest),
             0xA7 => Ok(Asn1Tag::SnmpV2Trap),
+            0x80 => Ok(Asn1Tag::NoSuchObject),
+            0x81 => Ok(Asn1Tag::NoSuchInstance),
+            0x82 => Ok(Asn1Tag::EndOfMib),
             // Anything else is unsupported
             other => Err(BerError::UnsupportedType(other)),
         }
