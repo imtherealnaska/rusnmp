@@ -16,19 +16,19 @@ struct Cli {
 enum Command {
     Get {
         #[clap(short, long, required = true)]
-        targets: Vec<String>,
-        #[clap(short, long, required = true)]
         community: String,
         #[clap(short, long, required = true)]
         oid: String,
+        #[clap( required = true , num_args = 1..)]
+        targets: Vec<String>,
     },
     Walk {
         #[clap(short, long, required = true)]
-        targets: Vec<String>,
-        #[clap(short, long, required = true)]
         community: String,
         #[clap(short, long, required = true)]
         oid: String,
+        #[clap( required = true , num_args = 1..)]
+        targets: Vec<String>,
     },
 }
 
