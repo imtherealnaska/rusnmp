@@ -190,12 +190,23 @@ impl TryFrom<i32> for ErrorStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PduData {
+    Basic {
+        error_status: ErrorStatus,
+        error_index: i32,
+    },
+    Bulk {
+        non_repeaters: i32,
+        max_repititions: i32,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pdu {
     pub tag: Asn1Tag,
     pub request_id: i32,
-    pub error_status: ErrorStatus,
-    pub error_index: i32,
+    pub data: PduData,
     pub varbinds: Vec<VarBind>,
 }
 
@@ -203,8 +214,22 @@ impl Pdu {
     pub fn write_to_buf(&self, buf: &mut Vec<u8>) {
         encoder::encode_container_with(buf, self.tag, |content_buf| {
             encoder::encode_integer(content_buf, self.request_id);
-            encoder::encode_integer(content_buf, self.error_status as i32);
-            encoder::encode_integer(content_buf, self.error_index);
+            match self.data {
+                PduData::Basic {
+                    error_status,
+                    error_index,
+                } => {
+                    encoder::encode_integer(content_buf, error_status as i32);
+                    encoder::encode_integer(content_buf, error_index);
+                }
+                PduData::Bulk {
+                    non_repeaters,
+                    max_repititions,
+                } => {
+                    encoder::encode_integer(content_buf, non_repeaters);
+                    encoder::encode_integer(content_buf, max_repititions);
+                }
+            }
             encoder::encode_sequence_with(content_buf, |varbind_list_buf| {
                 for varbind in &self.varbinds {
                     varbind.write_to_buf(varbind_list_buf);
@@ -230,25 +255,64 @@ pub fn parse_pdu(obj: BerObject) -> BerResult<Pdu> {
     let request_id = decode_integer(req_id_obj.value)?;
     current_slice = rest;
 
-    let (err_stat_obj, rest) = parse_ber_object(current_slice)?;
-    if err_stat_obj.tag != Asn1Tag::Integer {
-        return Err(BerError::UnexpectedTag {
-            expected: Asn1Tag::Integer,
-            got: err_stat_obj.tag,
-        });
-    }
-    let error_status_raw = decode_integer(err_stat_obj.value)?;
-    let error_status = ErrorStatus::try_from(error_status_raw)?;
-    current_slice = rest;
+    let (pdu_data, rest) = match pdu_tag {
+        Asn1Tag::GetBulkRequest => {
+            let (non_rep_obj, r1) = parse_ber_object(current_slice)?;
+            if non_rep_obj.tag != Asn1Tag::Integer {
+                return Err(BerError::UnexpectedTag {
+                    expected: Asn1Tag::Integer,
+                    got: non_rep_obj.tag,
+                });
+            }
+            let non_repeaters = decode_integer(non_rep_obj.value)?;
 
-    let (err_idx_obj, rest) = parse_ber_object(current_slice)?;
-    if err_idx_obj.tag != Asn1Tag::Integer {
-        return Err(BerError::UnexpectedTag {
-            expected: Asn1Tag::Integer,
-            got: err_idx_obj.tag,
-        });
-    }
-    let error_index = decode_integer(err_idx_obj.value)?;
+            let (max_rep_object, r2) = parse_ber_object(r1)?;
+            if max_rep_object.tag != Asn1Tag::Integer {
+                return Err(BerError::UnexpectedTag {
+                    expected: Asn1Tag::Integer,
+                    got: non_rep_obj.tag,
+                });
+            }
+
+            let max_repititons = decode_integer(max_rep_object.value)?;
+
+            (
+                PduData::Bulk {
+                    non_repeaters,
+                    max_repititions: max_repititons,
+                },
+                r2,
+            )
+        }
+        _ => {
+            let (err_stat_obj, r1) = parse_ber_object(current_slice)?;
+            if err_stat_obj.tag != Asn1Tag::Integer {
+                return Err(BerError::UnexpectedTag {
+                    expected: Asn1Tag::Integer,
+                    got: err_stat_obj.tag,
+                });
+            }
+            let error_status_raw = decode_integer(err_stat_obj.value)?;
+            let error_status = ErrorStatus::try_from(error_status_raw)?;
+
+            let (err_idx_obj, r2) = parse_ber_object(r1)?;
+            if err_idx_obj.tag != Asn1Tag::Integer {
+                return Err(BerError::UnexpectedTag {
+                    expected: Asn1Tag::Integer,
+                    got: err_idx_obj.tag,
+                });
+            }
+            let error_index = decode_integer(err_idx_obj.value)?;
+
+            (
+                PduData::Basic {
+                    error_status,
+                    error_index,
+                },
+                r2,
+            )
+        }
+    };
     current_slice = rest;
 
     let (varbind_list_obj, rest) = parse_ber_object(current_slice)?;
@@ -262,8 +326,7 @@ pub fn parse_pdu(obj: BerObject) -> BerResult<Pdu> {
     Ok(Pdu {
         tag: pdu_tag,
         request_id,
-        error_status,
-        error_index,
+        data: pdu_data,
         varbinds,
     })
 }

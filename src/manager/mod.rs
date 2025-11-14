@@ -1,6 +1,6 @@
 use crate::ber::Asn1Tag;
 use crate::snmp::message::{SnmpMessage, parse_message};
-use crate::snmp::pdu::{ErrorStatus, ObjectSyntax, Pdu, VarBind};
+use crate::snmp::pdu::{ErrorStatus, ObjectSyntax, Pdu, PduData, VarBind};
 use anyhow::{Ok, anyhow};
 
 use anyhow::Context;
@@ -158,6 +158,77 @@ impl Manager {
             results.push(response_varbind);
         }
         Ok(results)
+    }
 
+    pub async fn get_bulk(
+        &self,
+        target: &str,
+        community: &str,
+        non_repeaters: i32,
+        max_repititions: i32,
+        oid_strs: &[&str],
+    ) -> Result<Vec<VarBind>> {
+        let mut request_varbinds = Vec::new();
+        for s in oid_strs {
+            let oid = parse_oid_string(s)?;
+            request_varbinds.push(VarBind {
+                oid,
+                value: ObjectSyntax::Null, // null for request
+            });
+        }
+
+        if request_varbinds.is_empty() {
+            return Err(anyhow!("GetBulkRequest needs atlaeat one oid"));
+        }
+
+        // encode
+        let message = SnmpMessage {
+            version: 1,
+            community: community.as_bytes().to_vec(),
+            pdu: Pdu {
+                tag: Asn1Tag::GetBulkRequest,
+                request_id: 1,
+                data: crate::snmp::pdu::PduData::Bulk {
+                    non_repeaters,
+                    max_repititions,
+                },
+                varbinds: request_varbinds,
+            },
+        };
+
+        let packet_bytes = message.to_bytes();
+        let response_bytes = network::send_and_receive(target, &packet_bytes).await?;
+
+        let response_message = parse_message(&response_bytes)
+            .map_err(|e| anyhow!("Faield to parse response: {}", e))?;
+
+        if response_message.pdu.tag != Asn1Tag::GetBulkRequest {
+            return Err(anyhow!(
+                "Expewcted GetBulkRequest, got {:?}",
+                response_message.pdu.tag
+            ));
+        }
+
+        match response_message.pdu.data {
+            PduData::Basic {
+                error_status,
+                error_index,
+            } => {
+                if error_status != ErrorStatus::NoError {
+                    return Err(anyhow!(
+                        "
+                    SNMP Error : {:?} (Index : {})
+                            ",
+                        error_status,
+                        error_index
+                    ));
+                }
+            }
+            PduData::Bulk { .. } => {
+                return Err(anyhow!("received unexpected GetBulk PDU in response"));
+            }
+        }
+
+        Ok(response_message.pdu.varbinds)
     }
 }

@@ -1,3 +1,5 @@
+use std::env::var;
+
 use anyhow::Result;
 use clap::Parser;
 use futures::future::join_all;
@@ -29,6 +31,22 @@ enum Command {
         oid: String,
         #[clap( required = true , num_args = 1..)]
         targets: Vec<String>,
+    },
+    Bulk {
+        #[clap(short, long, required = true)]
+        community: String,
+
+        #[clap(short, long, default_value_t = 0)]
+        non_repeaters: i32,
+
+        #[clap(short, long, default_value_t = 10)]
+        max_repititions: i32,
+
+        #[clap(short, long, required = true)]
+        target: Vec<String>,
+
+        #[clap(short, long, num_args = 1..)]
+        oids: Vec<String>,
     },
 }
 
@@ -85,6 +103,36 @@ async fn main() -> Result<()> {
                     }
                     Err(e) => println!("Error: {}", e),
                 }
+            }
+        }
+        Command::Bulk {
+            community,
+            non_repeaters,
+            max_repititions,
+            target,
+            oids,
+        } => {
+            println!(
+                " --- starting getbulk for {} (NR : {} , MR :{})----",
+                target, non_repeaters, max_repititions
+            );
+
+            let oid_strs: Vec<&str> = oids.iter().map(AsRef::as_ref).collect();
+
+            let varbinds = manager
+                .get_bulk(
+                    &target,
+                    &community,
+                    non_repeaters,
+                    max_repititions,
+                    &oid_strs,
+                )
+                .await?;
+
+            println!("SUccess found {} results" , varbinds.len());
+
+            for varbind in varbinds {
+                print_varbind(&varbind);
             }
         }
     }
