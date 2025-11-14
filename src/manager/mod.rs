@@ -6,6 +6,7 @@ use anyhow::{Ok, anyhow};
 use anyhow::Context;
 pub mod network;
 use anyhow::Result;
+use tokio::net::lookup_host;
 
 fn parse_oid_string(oid_str: &str) -> Result<Vec<u32>> {
     oid_str
@@ -53,8 +54,10 @@ impl Manager {
             pdu: Pdu {
                 tag: Asn1Tag::GetRequest,
                 request_id: 1, // Simple request ID
-                error_status: ErrorStatus::NoError,
-                error_index: 0,
+                data: PduData::Basic {
+                    error_status: ErrorStatus::NoError,
+                    error_index: 0,
+                },
                 varbinds: vec![VarBind {
                     oid,
                     value: ObjectSyntax::Null, // Value is Null for a GetRequest
@@ -70,12 +73,18 @@ impl Manager {
         let response_message = parse_message(&response_bytes)
             .map_err(|e| anyhow!("Failed to parse response: {}", e))?;
 
-        if response_message.pdu.error_status != ErrorStatus::NoError {
-            return Err(anyhow!(
-                "SNMP Error: {:?} (Index: {})",
-                response_message.pdu.error_status,
-                response_message.pdu.error_index
-            ));
+        if let PduData::Basic {
+            error_status,
+            error_index,
+        } = response_message.pdu.data
+        {
+            if error_status != ErrorStatus::NoError {
+                return Err(anyhow!(
+                    "SNMP Error: {:?} (Index: {})",
+                    error_status,
+                    error_index
+                ));
+            }
         }
 
         response_message
@@ -103,8 +112,10 @@ impl Manager {
                 pdu: Pdu {
                     tag: Asn1Tag::GetNextRequest,
                     request_id: 1,
-                    error_status: ErrorStatus::NoError,
-                    error_index: 0,
+                    data: PduData::Basic {
+                        error_status: ErrorStatus::NoError,
+                        error_index: 0,
+                    },
                     varbinds: vec![VarBind {
                         oid: current_oid.clone(),
                         value: ObjectSyntax::Null,
@@ -120,18 +131,24 @@ impl Manager {
                 .map_err(|e| anyhow!("Failed to parse response: {}", e))?;
 
             // check for errors in the response
-            if response_message.pdu.error_status != ErrorStatus::NoError {
-                if response_message.pdu.error_status == ErrorStatus::NoSuchName {
-                    break;
-                }
+            if let PduData::Basic {
+                error_status,
+                error_index,
+            } = response_message.pdu.data
+            {
+                if error_status != ErrorStatus::NoError {
+                    if error_status == ErrorStatus::NoSuchName {
+                        break;
+                    }
 
-                return Err(anyhow!(
-                    "
+                    return Err(anyhow!(
+                        "
                 SNMP Error: {:?} (Index : {}) ,
                         ",
-                    response_message.pdu.error_status,
-                    response_message.pdu.error_index
-                ));
+                        error_status,
+                        error_index
+                    ));
+                }
             }
 
             let response_varbind = response_message
@@ -202,7 +219,7 @@ impl Manager {
         let response_message = parse_message(&response_bytes)
             .map_err(|e| anyhow!("Faield to parse response: {}", e))?;
 
-        if response_message.pdu.tag != Asn1Tag::GetBulkRequest {
+        if response_message.pdu.tag != Asn1Tag::GetResponse {
             return Err(anyhow!(
                 "Expewcted GetBulkRequest, got {:?}",
                 response_message.pdu.tag
@@ -230,5 +247,59 @@ impl Manager {
         }
 
         Ok(response_message.pdu.varbinds)
+    }
+
+    pub async fn bulk_walk(
+        &self,
+        target: &str,
+        community: &str,
+        root_oid_str: &str,
+        max_repititions: i32,
+    ) -> Result<Vec<VarBind>> {
+        let mut results = Vec::new();
+        let root_oid = parse_oid_string(root_oid_str)?;
+        let mut current_oid_str = root_oid_str.to_string();
+
+        loop {
+            // call existing get_bulk function
+            let varbind_batch = self
+                .get_bulk(target, community, 0, max_repititions, &[&current_oid_str])
+                .await?;
+
+            if varbind_batch.is_empty() {
+                break;
+            }
+
+            let mut last_oid_in_batch = None;
+            for varbind in varbind_batch {
+                match varbind.value {
+                    ObjectSyntax::EndOfMib
+                    | ObjectSyntax::NoSuchObject
+                    | ObjectSyntax::NoSuchInstance => {
+                        return Ok(results);
+                    }
+                    _ => {}
+                }
+
+                if !is_in_subtree(&root_oid, &varbind.oid) {
+                    return Ok(results);
+                }
+
+                last_oid_in_batch = Some(varbind.oid.clone());
+                results.push(varbind);
+            }
+
+            if let Some(last_oid) = last_oid_in_batch {
+                current_oid_str = last_oid
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(".");
+            } else {
+                // if we get a batch then this should not be reached... safe exit
+                break;
+            }
+        }
+        Ok(results)
     }
 }

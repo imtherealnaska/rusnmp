@@ -1,8 +1,7 @@
-use std::env::var;
-
 use anyhow::Result;
 use clap::Parser;
 use futures::future::join_all;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rusnmp::{
     manager::Manager,
     snmp::pdu::{ObjectSyntax, VarBind},
@@ -36,17 +35,30 @@ enum Command {
         #[clap(short, long, required = true)]
         community: String,
 
+        #[clap(short, long, required = true)]
+        target: String,
+
         #[clap(short, long, default_value_t = 0)]
         non_repeaters: i32,
 
         #[clap(short, long, default_value_t = 10)]
         max_repititions: i32,
 
-        #[clap(short, long, required = true)]
-        target: Vec<String>,
-
-        #[clap(short, long, num_args = 1..)]
+        #[clap(required = true , num_args = 1..)]
         oids: Vec<String>,
+    },
+    BulkWalk {
+        #[clap(short, long, required = true)]
+        community: String,
+
+        #[clap(short, long, required = true)]
+        target: String,
+
+        #[clap(short, long, default_value_t = 20)]
+        max_repetitions: i32,
+
+        #[clap(required = true)]
+        oid: String,
     },
 }
 
@@ -54,6 +66,12 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let manager = Manager::new();
+
+    let multip_progress = MultiProgress::new();
+    let main_pb = multip_progress.add(ProgressBar::new(0));
+    main_pb.set_style(ProgressStyle::default_bar().template(
+        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos/len} ({percent}%)",
+    )?);
 
     match cli.command {
         Command::Get {
@@ -129,8 +147,28 @@ async fn main() -> Result<()> {
                 )
                 .await?;
 
-            println!("SUccess found {} results" , varbinds.len());
+            println!("SUccess found {} results", varbinds.len());
 
+            for varbind in varbinds {
+                print_varbind(&varbind);
+            }
+        }
+        Command::BulkWalk {
+            community,
+            target,
+            max_repetitions,
+            oid,
+        } => {
+            println!(
+                "--- Starting BULK WALK for {} (MR: {}) ---",
+                target, max_repetitions
+            );
+
+            let varbinds = manager
+                .bulk_walk(&target, &community, &oid, max_repetitions)
+                .await?;
+
+            println!("\n--- Success  (Found {} results) ---", varbinds.len());
             for varbind in varbinds {
                 print_varbind(&varbind);
             }
