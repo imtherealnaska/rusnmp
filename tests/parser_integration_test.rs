@@ -4,6 +4,7 @@ use rusnmp::snmp::message::parse_message;
 use rusnmp::snmp::pdu::ErrorStatus;
 use rusnmp::snmp::pdu::ObjectSyntax;
 use rusnmp::snmp::pdu::Pdu;
+use rusnmp::snmp::pdu::PduData;
 use rusnmp::snmp::pdu::VarBind;
 
 const RAW_PACKET: &[u8] = &[
@@ -22,8 +23,13 @@ fn test_parse_v2c_get_request() {
     let pdu = message.pdu;
     assert_eq!(pdu.tag, Asn1Tag::GetRequest);
     assert_eq!(pdu.request_id, 1);
-    assert_eq!(pdu.error_status, ErrorStatus::NoError);
-    assert_eq!(pdu.error_index, 0);
+    match pdu.data {
+        PduData::Basic { error_status, error_index } => {
+            assert_eq!(error_status, ErrorStatus::NoError);
+            assert_eq!(error_index, 0);
+        }
+        _ => panic!("Expected Basic PDU data"),
+    }
 
     assert_eq!(pdu.varbinds.len(), 1);
 
@@ -52,8 +58,13 @@ fn test_parse_v2c_get_response() {
     let pdu = message.pdu;
     assert_eq!(pdu.tag, Asn1Tag::GetResponse);
     assert_eq!(pdu.request_id, 1);
-    assert_eq!(pdu.error_status, ErrorStatus::NoError);
-    assert_eq!(pdu.error_index, 0);
+    match pdu.data {
+        PduData::Basic { error_status, error_index } => {
+            assert_eq!(error_status, ErrorStatus::NoError);
+            assert_eq!(error_index, 0);
+        }
+        _ => panic!("Expected Basic PDU data"),
+    }
 
     assert_eq!(pdu.varbinds.len(), 1);
 
@@ -115,8 +126,10 @@ fn test_encode_v2c_get_request() {
         pdu: Pdu {
             tag: Asn1Tag::GetRequest,
             request_id: 1,
-            error_status: ErrorStatus::NoError,
-            error_index: 0,
+            data: PduData::Basic {
+                error_status: ErrorStatus::NoError,
+                error_index: 0,
+            },
             varbinds: vec![VarBind {
                 oid: vec![1, 3, 6, 1, 2, 1, 1, 1, 0],
                 value: ObjectSyntax::Null,

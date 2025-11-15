@@ -7,4 +7,3 @@ Level 3: VarBindList (SEQUENCE OF) <-- This is parse_varbind_list
 Level 4: VarBind (SEQUENCE) <-- This is the inner-most SEQUENCE
 
 
-All tests will be written by Claude
