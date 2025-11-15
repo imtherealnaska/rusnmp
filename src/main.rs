@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use clap::Parser;
 use futures::future::join_all;
@@ -57,7 +59,7 @@ enum Command {
         #[clap(short, long, default_value_t = 20)]
         max_repetitions: i32,
 
-        #[clap(required = true)]
+        #[clap(short, long, required = true)]
         oid: String,
     },
 }
@@ -65,78 +67,101 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let manager = Manager::new();
 
-    let multip_progress = MultiProgress::new();
-    let main_pb = multip_progress.add(ProgressBar::new(0));
+    let manager = Arc::new(Manager::new());
+    let multi_progress = MultiProgress::new();
+    let main_pb = multi_progress.add(ProgressBar::new(0)); // Main progress bar
     main_pb.set_style(ProgressStyle::default_bar().template(
-        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos/len} ({percent}%)",
+        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%)",
     )?);
 
-    match cli.command {
+    let (results, targets) = match cli.command {
         Command::Get {
-            targets,
             community,
             oid,
+            targets,
         } => {
-            println!("Starting GET for {} targets", targets.len());
+            main_pb.set_length(targets.len() as u64);
+            main_pb.set_message("Running GET");
+            let mut tasks = Vec::new();
 
-            let futures = targets.iter().map(|target| {
-                println!("---spawining task for {}", target);
-                manager.get(target, &community, &oid)
-            });
+            for target in &targets {
+                let task_pb = multi_progress.add(ProgressBar::new_spinner());
+                task_pb.set_style(
+                    ProgressStyle::default_spinner()
+                        .template("{spinner:.green} {msg}")
+                        .unwrap(),
+                );
+                task_pb.set_message(format!("GET: {}", target));
 
-            let results = join_all(futures).await;
+                let manager = Arc::clone(&manager);
+                let community = community.clone();
+                let oid = oid.clone();
+                let target = target.clone();
+                let main_pb = main_pb.clone();
 
-            for (target, result) in targets.iter().zip(results) {
-                println!("\n--- Result for {} ---", target);
-                match result {
-                    Ok(varbind) => print_varbind(&varbind),
-                    Err(e) => println!("Error: {}", e),
-                }
+                tasks.push(tokio::spawn(async move {
+                    task_pb.enable_steady_tick(std::time::Duration::from_millis(100));
+                    let result = manager
+                        .get(&target, &community, &oid)
+                        .await
+                        .map(|vb| vec![vb]);
+                    task_pb.finish_with_message(format!("GET: {}", target));
+                    main_pb.inc(1);
+                    result
+                }));
             }
+            (join_all(tasks).await, targets)
         }
+
         Command::Walk {
-            targets,
             community,
             oid,
+            targets,
         } => {
-            let futures = targets.iter().map(|target| {
-                println!("- Spawning task for {}", target);
-                manager.walk(target, &community, &oid)
-            });
+            main_pb.set_length(targets.len() as u64);
+            main_pb.set_message("Running WALK");
+            let mut tasks = Vec::new();
 
-            // Run all tasks concurrently
-            let results = join_all(futures).await;
+            for target in &targets {
+                // --- INDICATIF: Create spinner for each task ---
+                let task_pb = multi_progress.add(ProgressBar::new_spinner());
+                task_pb.set_style(
+                    ProgressStyle::default_spinner()
+                        .template("{spinner:.green} {msg}")
+                        .unwrap(),
+                );
+                task_pb.set_message(format!("WALK: {}", target));
 
-            // Loop through the results and print them
-            for (target, result) in targets.iter().zip(results) {
-                println!("\n--- Result for {} ---", target);
-                match result {
-                    Ok(varbinds) => {
-                        println!("Success! (Found {} results)", varbinds.len());
-                        for varbind in varbinds {
-                            print_varbind(&varbind);
-                        }
-                    }
-                    Err(e) => println!("Error: {}", e),
-                }
+                let manager = Arc::clone(&manager);
+                let community = community.clone();
+                let oid = oid.clone();
+                let target = target.clone();
+                let main_pb = main_pb.clone();
+
+                // --- NEW: Spawn a true tokio task ---
+                tasks.push(tokio::spawn(async move {
+                    task_pb.enable_steady_tick(std::time::Duration::from_millis(100));
+                    let result = manager.walk(&target, &community, &oid).await;
+                    task_pb.finish_with_message(format!("WALK: {}", target));
+                    main_pb.inc(1);
+                    result
+                }));
             }
+            (join_all(tasks).await, targets)
         }
+
+        // --- Other commands (Bulk, BulkWalk) ---
+        // We'll leave these as-is for now, they won't get progress bars
+        // but they will still work.
         Command::Bulk {
             community,
+            target,
             non_repeaters,
             max_repititions,
-            target,
             oids,
         } => {
-            println!(
-                " --- starting getbulk for {} (NR : {} , MR :{})----",
-                target, non_repeaters, max_repititions
-            );
-
             let oid_strs: Vec<&str> = oids.iter().map(AsRef::as_ref).collect();
-
             let varbinds = manager
                 .get_bulk(
                     &target,
@@ -146,12 +171,11 @@ async fn main() -> Result<()> {
                     &oid_strs,
                 )
                 .await?;
-
-            println!("SUccess found {} results", varbinds.len());
-
+            println!("\n--- Success! (Found {} results) ---", varbinds.len());
             for varbind in varbinds {
                 print_varbind(&varbind);
             }
+            return Ok(()); // Exit early
         }
         Command::BulkWalk {
             community,
@@ -159,21 +183,44 @@ async fn main() -> Result<()> {
             max_repetitions,
             oid,
         } => {
-            println!(
-                "--- Starting BULK WALK for {} (MR: {}) ---",
-                target, max_repetitions
-            );
-
             let varbinds = manager
                 .bulk_walk(&target, &community, &oid, max_repetitions)
                 .await?;
-
-            println!("\n--- Success  (Found {} results) ---", varbinds.len());
+            println!("\n--- Success! (Found {} results) ---", varbinds.len());
             for varbind in varbinds {
                 print_varbind(&varbind);
             }
+            return Ok(()); // Exit early
+        }
+    };
+
+    // --- INDICATIF: Clean up ---
+    main_pb.finish_with_message("All tasks complete!");
+
+    // 4. Print results
+    println!("\n--- === All Results === ---");
+    for (target, result) in targets.iter().zip(results) {
+        println!("\n--- Result for {} ---", target);
+        // The result from tokio::spawn is itself a Result
+        match result {
+            Ok(Ok(varbinds)) => {
+                // Task succeeded, manager succeeded
+                println!("Success! (Found {} results)", varbinds.len());
+                for varbind in varbinds {
+                    print_varbind(&varbind);
+                }
+            }
+            Ok(Err(e)) => {
+                // Task succeeded, manager returned an error
+                println!("Error: {}", e);
+            }
+            Err(e) => {
+                // Task itself panicked
+                println!("Task Panicked: {}", e);
+            }
         }
     }
+
     Ok(())
 }
 
